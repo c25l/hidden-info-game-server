@@ -1,0 +1,167 @@
+#!/bin/sh
+#|-*- mode:lisp -*-|#
+#|
+exec ros -Q -- $0 "$@"
+|#
+(progn ;;init forms
+  (ros:ensure-asdf)
+  ;;#+quicklisp(ql:quickload '() :silent t)
+  )
+
+(defpackage :ros.script.artist.3785498636
+  (:use :cl))
+(in-package :ros.script.artist.3785498636)
+(ql:quickload '(:hunchentoot)) ; :cl-ppcre :alexandria :flexi-streams
+
+(defclass game ()
+  ((players
+    :initform 0
+    :accessor game-players)
+   (iter
+    :initform 0
+    :accessor game-iter)
+   (topic
+    :initform ""
+    :accessor game-topic)
+   (leader
+    :initform -1
+    :accessor game-leader)
+   (impostor
+    :initform -1
+    :accessor game-impostor)))
+
+(defun new-game () (make-instance 'game))
+
+(defun add-player (game)
+  (setf (game-players game) (+ 1 (game-players game)))
+  game)
+
+(defun pick-player (game)
+  (let* ((leader (game-leader game))
+         (player-count (game-players game)))
+    (if (<= player-count 1)
+        0
+        (let ((first-choice (+ 1 (random player-count))))
+              (if (= first-choice leader)
+                  (pick-player game)
+                  first-choice
+              )))))
+
+(defun pick-leader (game)
+  (let ((new-leader (pick-player game)))
+    (setf (game-leader game) new-leader)
+    (setf (game-iter game) (+ 1 (game-iter game)))
+    (setf (game-topic game) "")
+    game
+    ))
+
+(defun pick-impostor (game)
+  (let ((new-fake (pick-player game)))
+    (setf (game-impostor game) new-fake)
+    game
+    ))
+
+(defun update-topic (game topic)
+  (setf (game-topic game) topic)
+  game
+  )
+
+(defun my-topic (game player)
+  (let ((topic (game-topic game)))
+    (if (string= topic "")
+        "topic isn't set yet, please wait for the leader to set the topic, or for someone to start the game."
+        (if (= player (game-impostor game))
+               "XXXXXXXXXX"
+               topic))))
+
+(defvar *games* (make-hash-table))
+(setf (gethash 0 *games*) (new-game))
+(defun add-game (x)
+  (let ((game (new-game)))
+    (setf (gethash x *games*) game)
+    game
+    ))
+
+(defun get-or-new-game (num)
+  (if (gethash num *games*)
+      (gethash num *games*)
+      (add-game num)))
+
+(defun gp-seg (g p)
+  (format nil "?g=~A&p=~A" g p))
+
+(defun webpage (custom g p leader? ingame?)
+  (format nil
+  (let ((path (gp-seg g p)))
+    (format nil "<DOCTYPE html>
+<html><body>
+<div id=\"custom\">
+~A
+</div> <br> <div id=\"game\"><button type=\"button\" id=\"hider\" onclick=\"toggleDiv('custom')\">Show+Hide</button>
+<div id=\"leader\">
+If you're the leader, you can set the topic:
+<textarea id=\"newTopic\" rows=\"1\"></textarea><br>
+<button id=\"topicSubmit\" onclick=\"newTopic()\">Submit Topic</button>
+</div><br>
+<br><button type=\"button\" id=\"refresh\" onclick=\"location.reload(true)\">Refresh</button>
+<button type=\"button\" id=\"next\" onclick=\"nextRound()\">Next Round</button></div>
+</body>
+<script>
+function toggleDiv(id) {
+var div = document.getElementById(id);
+div.style.display = div.style.display == \"none\" ? \"block\" : \"none\";}
+~A
+~A
+function newTopic(){
+var topic = document.getElementById(\"newTopic\").value;
+window.location.href = '/topic~A&topic='+topic;}
+function nextRound(){
+window.location.href = '/next~A';}
+</script>
+<html>" custom  (if leader? "" "toggleDiv('leader')\;") (if ingame? "" "toggleDiv('game')\;") path path
+))))
+
+(hunchentoot:define-easy-handler (status :uri "/status") (g p)
+  (setf (hunchentoot:content-type*) "text/html")
+  (let* ((p (parse-integer p))
+	 (g (parse-integer g))
+	 (game (get-or-new-game g))
+         (leader? (= (game-leader game) p)))
+(webpage (format nil "The topic is: ~A" (my-topic game p)) g p leader? 1)
+             ))
+
+(hunchentoot:define-easy-handler (join :uri "/join") (g)
+  (setf (hunchentoot:content-type*) "text/html")
+  (let* ((g (if g g "0"))
+	 (game (get-or-new-game (parse-integer g)))
+         (game (add-player game))
+	 (p (game-players game)))
+    (webpage (format nil "<a href=/status~A>go here</a>"  (gp-seg g p)) g p nil nil)))
+
+(hunchentoot:define-easy-handler (next :uri "/next") (g p)
+  (setf (hunchentoot:content-type*) "text/html")
+  (let* ((game (get-or-new-game (parse-integer g)))
+         (leader? (= (parse-integer p) (game-leader game))))
+    (when (or leader? (= -1 (game-leader game)))
+          (pick-leader game)
+          (pick-impostor game)
+          )
+    (format nil "<meta http-equiv='Refresh' content='0; url=/status~A'/>"
+	    (gp-seg g p))))
+
+(hunchentoot:define-easy-handler (topic :uri "/topic") (g p topic)
+  (setf (hunchentoot:content-type*) "text/html")
+  (let* ((game (get-or-new-game (parse-integer g)))
+         (leader? (= (parse-integer p) (game-leader game))))
+    (when leader?
+          (update-topic game topic)
+          )
+    (format nil "<meta http-equiv='Refresh' content='0; url=/status~A'/>" (gp-seg g p))
+    ))
+
+
+(defun main (&rest argv)
+(declare (ignorable argv))
+(hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port 8000))
+(loop (print (eval (read)))))
+;;; vim: set ft=lisp lisp:
