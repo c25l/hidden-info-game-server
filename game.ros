@@ -90,27 +90,30 @@ exec ros -Q -- $0 "$@"
 (defun gp-seg (g p)
   (format nil "?g=~A&p=~A" g p))
 
-(defun webpage (custom g p leader? ingame?)
-  (format nil
-  (let ((path (gp-seg g p)))
-    (format nil "<DOCTYPE html>
+(hunchentoot:define-easy-handler (status :uri "/status") (g p)
+  (setf (hunchentoot:content-type*) "text/html")
+  (let* ((p (parse-integer p))
+	 (g (parse-integer g))
+	 (game (get-or-new-game g))
+	 (path (gp-seg g p))
+	 (leader? (= (game-leader game) p))
+	 (topic-set? (not (string= "" (game-topic game)))))
+    (format nil "<!DOCTYPE html>
 <html><body>
 <div id=\"custom\">
-~A
+The topic is: ~A
 </div> <br> <div id=\"game\"><button type=\"button\" id=\"hider\" onclick=\"toggleDiv('custom')\">Show+Hide</button>
 <div id=\"leader\">
 If you're the leader, you can set the topic:
 <textarea id=\"newTopic\" rows=\"1\"></textarea><br>
 <button id=\"topicSubmit\" onclick=\"newTopic()\">Submit Topic</button>
 </div><br>
-<br><button type=\"button\" id=\"refresh\" onclick=\"location.reload(true)\">Refresh</button>
-<button type=\"button\" id=\"next\" onclick=\"nextRound()\">Next Round</button></div>
+<br><button type=\"button\" id=\"refreshNext\" onclick=\"nextRound()\">Refresh/Next Round</button></div>
 </body>
 <script>
 function toggleDiv(id) {
 var div = document.getElementById(id);
 div.style.display = div.style.display == \"none\" ? \"block\" : \"none\";}
-~A
 ~A
 function newTopic(){
 var topic = document.getElementById(\"newTopic\").value;
@@ -118,17 +121,8 @@ window.location.href = '/topic~A&topic='+topic;}
 function nextRound(){
 window.location.href = '/next~A';}
 </script>
-<html>" custom  (if leader? "" "toggleDiv('leader')\;") (if ingame? "" "toggleDiv('game')\;") path path
-))))
-
-(hunchentoot:define-easy-handler (status :uri "/status") (g p)
-  (setf (hunchentoot:content-type*) "text/html")
-  (let* ((p (parse-integer p))
-	 (g (parse-integer g))
-	 (game (get-or-new-game g))
-         (leader? (= (game-leader game) p)))
-(webpage (format nil "The topic is: ~A" (my-topic game p)) g p leader? 1)
-             ))
+<html>" (my-topic game p) (if (and leader? (not topic-set?)) "" "toggleDiv('leader')\;") path path
+)))
 
 (hunchentoot:define-easy-handler (join :uri "/join") (g)
   (setf (hunchentoot:content-type*) "text/html")
@@ -136,16 +130,21 @@ window.location.href = '/next~A';}
 	 (game (get-or-new-game (parse-integer g)))
          (game (add-player game))
 	 (p (game-players game)))
-    (webpage (format nil "<a href=/status~A>go here</a>"  (gp-seg g p)) g p nil nil)))
+    (format nil "<!doctype html><html><body><a href=/status~A>go here</a></body></html>"  (gp-seg g p))))
 
 (hunchentoot:define-easy-handler (next :uri "/next") (g p)
   (setf (hunchentoot:content-type*) "text/html")
   (let* ((game (get-or-new-game (parse-integer g)))
-         (leader? (= (parse-integer p) (game-leader game))))
-    (when (or leader? (= -1 (game-leader game)))
+	 (leader (game-leader game))
+         (leader? (= (parse-integer p) leader)))
+    (when (or leader? (>= 0 leader))
           (pick-leader game)
           (pick-impostor game)
           )
+      '(let* ((players (game-players game))
+	     (faker (game-impostor game))
+	     (topic (game-topic game)))
+	(format *error-output* "game ~A, leader ~A, players ~A, impostor ~A, topic ~A" g leader players faker topic))
     (format nil "<meta http-equiv='Refresh' content='0; url=/status~A'/>"
 	    (gp-seg g p))))
 
@@ -159,9 +158,8 @@ window.location.href = '/next~A';}
     (format nil "<meta http-equiv='Refresh' content='0; url=/status~A'/>" (gp-seg g p))
     ))
 
-
 (defun main (&rest argv)
-(declare (ignorable argv))
-(hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port 8000))
-(loop (print (eval (read)))))
+  (declare (ignorable argv))
+  (hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port 8000))
+  (loop (print (eval (read)))))
 ;;; vim: set ft=lisp lisp:
